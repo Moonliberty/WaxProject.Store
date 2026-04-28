@@ -1,4 +1,27 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { initializeApp } from "firebase/app";
+import {
+  getFirestore,
+  collection,
+  getDocs,
+  addDoc,
+  deleteDoc,
+  doc,
+  serverTimestamp
+} from "firebase/firestore";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyDombadTGEayBlxLw-75dvZ0pn0loKRVkA",
+  authDomain: "waxprojectstore-cfdfe.firebaseapp.com",
+  projectId: "waxprojectstore-cfdfe",
+  storageBucket: "waxprojectstore-cfdfe.firebasestorage.app",
+  messagingSenderId: "204660105086",
+  appId: "1:204660105086:web:72a9ed57bd6ab74b6b9d2f",
+  measurementId: "G-LNHCQM4R7V"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
 
 const CONTACTS = {
   emailText: "waxprojectstore@gmail.com",
@@ -9,11 +32,10 @@ const CONTACTS = {
 };
 
 const OWNER_EMAIL = "waxprojectstore@gmail.com";
-const MANAGER_EMAILS = ["waxprojectstore@gmail.com"];
 
 const starterProducts = [
   {
-    id: "p1",
+    id: "demo-1",
     name: "Luxury Zip Hoodie",
     price: 3200,
     category: "Худі",
@@ -22,7 +44,7 @@ const starterProducts = [
     sizes: ["S", "M", "L", "XL"],
   },
   {
-    id: "p2",
+    id: "demo-2",
     name: "Designer Sneakers",
     price: 4600,
     category: "Взуття",
@@ -31,7 +53,7 @@ const starterProducts = [
     sizes: ["40", "41", "42", "43", "44"],
   },
   {
-    id: "p3",
+    id: "demo-3",
     name: "Premium Jacket",
     price: 5900,
     category: "Куртки",
@@ -75,16 +97,15 @@ function safeSizes(sizes) {
 function getRoleByEmail(email) {
   const clean = String(email || "").trim().toLowerCase();
   if (clean === OWNER_EMAIL.toLowerCase()) return "admin";
-  if (MANAGER_EMAILS.map((m) => m.toLowerCase()).includes(clean)) return "manager";
   return "user";
 }
 
 function canOpenAdmin(user) {
-  return user?.role === "admin" || user?.role === "manager";
+  return user?.role === "admin";
 }
 
 export default function App() {
-  const [products, setProducts] = useState(() => readStorage("wax_products", starterProducts));
+  const [products, setProducts] = useState(starterProducts);
   const [cart, setCart] = useState(() => readStorage("wax_cart", []));
   const [user, setUser] = useState(() => readStorage("wax_user", null));
   const [orders, setOrders] = useState(() => readStorage("wax_orders", []));
@@ -93,14 +114,42 @@ export default function App() {
   const [category, setCategory] = useState("Усі");
   const [menuOpen, setMenuOpen] = useState(false);
   const [error, setError] = useState("");
+  const [loadingProducts, setLoadingProducts] = useState(true);
   const [authForm, setAuthForm] = useState({ name: "", email: "", password: "" });
   const [checkoutForm, setCheckoutForm] = useState({ name: "", phone: "", city: "", address: "", comment: "" });
   const [newProduct, setNewProduct] = useState({ name: "", price: "", category: "", image: "", description: "", sizes: "" });
 
-  useEffect(() => localStorage.setItem("wax_products", JSON.stringify(products)), [products]);
   useEffect(() => localStorage.setItem("wax_cart", JSON.stringify(cart)), [cart]);
   useEffect(() => localStorage.setItem("wax_user", JSON.stringify(user)), [user]);
   useEffect(() => localStorage.setItem("wax_orders", JSON.stringify(orders)), [orders]);
+
+  async function loadProducts() {
+    setLoadingProducts(true);
+    try {
+      const snapshot = await getDocs(collection(db, "products"));
+      const firebaseProducts = snapshot.docs.map((d) => ({
+        id: d.id,
+        firebaseId: d.id,
+        ...d.data(),
+      }));
+
+      if (firebaseProducts.length > 0) {
+        setProducts(firebaseProducts);
+      } else {
+        setProducts(starterProducts);
+      }
+    } catch (e) {
+      console.error(e);
+      setError("Не вдалося завантажити товари з Firebase.");
+      setProducts(starterProducts);
+    } finally {
+      setLoadingProducts(false);
+    }
+  }
+
+  useEffect(() => {
+    loadProducts();
+  }, []);
 
   const cartCount = cart.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
   const cartTotal = cart.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0);
@@ -235,7 +284,7 @@ export default function App() {
     reader.readAsDataURL(file);
   }
 
-  function addProduct() {
+  async function addProduct() {
     if (!newProduct.name || !newProduct.price) {
       setError("Вкажіть назву та ціну товару.");
       return;
@@ -243,35 +292,39 @@ export default function App() {
 
     const sizes = newProduct.sizes.split(",").map((s) => s.trim()).filter(Boolean);
     const product = {
-      id: "p" + Date.now(),
       name: newProduct.name.trim(),
       price: Number(newProduct.price),
       category: normalizeCategory(newProduct.category || "Нове"),
       image: newProduct.image || "https://images.unsplash.com/photo-1441984904996-e0b6ba687e04?q=80&w=1200&auto=format&fit=crop",
       description: newProduct.description || "Товар під замовлення з Китаю. Доставка 12–18 днів.",
       sizes: sizes.length ? sizes : ["One Size"],
+      createdAt: serverTimestamp(),
     };
 
-    setProducts((prev) => [product, ...prev]);
-    setNewProduct({ name: "", price: "", category: "", image: "", description: "", sizes: "" });
-    setError("");
+    try {
+      await addDoc(collection(db, "products"), product);
+      setNewProduct({ name: "", price: "", category: "", image: "", description: "", sizes: "" });
+      setError("");
+      await loadProducts();
+    } catch (e) {
+      console.error(e);
+      setError("Не вдалося додати товар. Перевірте правила Firestore.");
+    }
   }
 
-  function deleteProduct(id) {
-    setProducts((prev) => prev.filter((product) => product.id !== id));
-    setCart((prev) => prev.filter((item) => item.id !== id));
-  }
-
-  function resetDemo() {
-    localStorage.removeItem("wax_products");
-    localStorage.removeItem("wax_cart");
-    localStorage.removeItem("wax_user");
-    localStorage.removeItem("wax_orders");
-    setProducts(starterProducts);
-    setCart([]);
-    setUser(null);
-    setOrders([]);
-    go("shop");
+  async function deleteProduct(product) {
+    try {
+      if (product.firebaseId) {
+        await deleteDoc(doc(db, "products", product.firebaseId));
+        await loadProducts();
+      } else {
+        setProducts((prev) => prev.filter((item) => item.id !== product.id));
+      }
+      setCart((prev) => prev.filter((item) => item.id !== product.id));
+    } catch (e) {
+      console.error(e);
+      setError("Не вдалося видалити товар.");
+    }
   }
 
   return (
@@ -367,6 +420,8 @@ export default function App() {
                 </div>
               </div>
 
+              {loadingProducts && <p className="muted">Завантаження товарів...</p>}
+
               <div className="products">
                 {filteredProducts.length ? filteredProducts.map((product) => <ProductCard key={product.id} product={product} addToCart={addToCart} />) : <Empty text="Товарів у цій категорії поки немає." />}
               </div>
@@ -424,7 +479,7 @@ export default function App() {
               <Input label="Пароль" type="password" value={authForm.password} onChange={(v) => setAuthForm({ ...authForm, password: v })} />
               {error && <Error text={error} />}
               <button className="primary wide" onClick={registerOrLogin}>Увійти / зареєструватися</button>
-              <p className="hint">Для прототипу вхід зберігається у браузері. У реальному сайті це буде Firebase Auth.</p>
+              <p className="hint">Для входу в адмінку використовуйте пошту waxprojectstore@gmail.com</p>
             </div>
           </Page>
         )}
@@ -434,7 +489,7 @@ export default function App() {
             <div className="stats">
               <Stat title="Клієнт" value={user.name} />
               <Stat title="Бонусний баланс" value={formatPrice(user.bonus)} />
-              <Stat title="Статус" value={user.role === "admin" ? "Owner / Admin" : user.role === "manager" ? "Manager" : "Покупець"} />
+              <Stat title="Статус" value={user.role === "admin" ? "Owner / Admin" : "Покупець"} />
             </div>
             <div className="actions">
               {canOpenAdmin(user) && <button className="primary" onClick={() => go("admin")}>Адмінка</button>}
@@ -444,7 +499,7 @@ export default function App() {
         )}
 
         {page === "admin" && canOpenAdmin(user) && (
-          <Page title="Адмінка WaxProject" subtitle="Admin може додавати й видаляти товари, manager — дивитися замовлення.">
+          <Page title="Адмінка WaxProject" subtitle="Товари зберігаються у Firebase — їх бачать всі користувачі.">
             <div className="admin-layout">
               <div className="admin-form">
                 <h3>Додати товар</h3>
@@ -459,13 +514,12 @@ export default function App() {
                 <Input label="Розміри через кому" value={newProduct.sizes} onChange={(v) => setNewProduct({ ...newProduct, sizes: v })} />
                 <Input label="Опис" value={newProduct.description} onChange={(v) => setNewProduct({ ...newProduct, description: v })} />
                 {error && <Error text={error} />}
-                {user.role === "admin" ? <button className="primary wide" onClick={addProduct}>Додати</button> : <p className="hint">Додавати товари може тільки owner/admin.</p>}
-                <button className="secondary wide" onClick={resetDemo}>Скинути демо-дані</button>
+                <button className="primary wide" onClick={addProduct}>Додати в Firebase</button>
               </div>
               <div className="admin-side">
                 <div className="panel">
                   <h3>Товари</h3>
-                  {products.map((product) => <AdminProduct key={product.id} product={product} deleteProduct={deleteProduct} user={user} />)}
+                  {products.map((product) => <AdminProduct key={product.id} product={product} deleteProduct={deleteProduct} />)}
                 </div>
                 <div className="panel">
                   <h3>Замовлення</h3>
@@ -605,8 +659,8 @@ function Stat({ title, value }) {
   return <div className="stat"><p>{title}</p><h3>{value}</h3></div>;
 }
 
-function AdminProduct({ product, deleteProduct, user }) {
-  return <div className="admin-product"><img src={product.image} alt={product.name} /><div><b>{product.name}</b><p>{formatPrice(product.price)} · {normalizeCategory(product.category)}</p></div>{user?.role === "admin" && <button onClick={() => deleteProduct(product.id)}>Видалити</button>}</div>;
+function AdminProduct({ product, deleteProduct }) {
+  return <div className="admin-product"><img src={product.image} alt={product.name} /><div><b>{product.name}</b><p>{formatPrice(product.price)} · {normalizeCategory(product.category)}</p></div><button onClick={() => deleteProduct(product)}>Видалити</button></div>;
 }
 
 function Order({ order }) {
